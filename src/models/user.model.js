@@ -1,5 +1,5 @@
 import mongoose, {Schema} from "mongoose";
-import jwt from "jsonwebtokeen"
+import jwt from "jsonwebtoken"
 import bcrypt from "bcrypt"
 // Direct encryption is not possible so we take help of some hooks from mongoose
 
