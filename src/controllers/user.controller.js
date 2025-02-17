@@ -226,7 +226,7 @@ const refreshAccessToken = asyncHandler( async (req, res) => {
     }
 })
 
-const changeCurrentPassword = asynHandler(async (req,res) => {
+const changeCurrentPassword = asyncHandler(async (req,res) => {
     const {oldPassword, newPassword} = req.body
 
     const user = await User.findById(req.user?._id)
@@ -247,7 +247,7 @@ const changeCurrentPassword = asynHandler(async (req,res) => {
 const getCurrentUser = asyncHandler(async(req,res) => {
     return res
     .status(200)
-    .json(200, req.user, "User details fetched successfully")
+    .json(new ApiResponse(200, req.user, "User details fetched successfully"))
 })
 
 const updateAccountDetails = asyncHandler(async(req,res) => {
@@ -257,7 +257,7 @@ const updateAccountDetails = asyncHandler(async(req,res) => {
         throw new ApiError(400, "fullname and email are required")
     }
 
-    const user = User.findByIdAndUpdate(req.user?._id,
+    const user = await User.findByIdAndUpdate(req.user?._id,
         {
             $set: {
                 fullname, // we can write in both ways fullname: fullname
@@ -329,6 +329,142 @@ const updateUserCoverImage = asyncHandler(async(req,res) => {
     .json(new ApiResponse(200, user, "Cover image updated successfully"))
 })
 
+const getUserChannelProfile = asyncHandler(async(req,res) => {
+    const {username} = req.params
+
+    if(!username?.trim()) {
+        throw new ApiError(400, "username is missing")
+    }
+
+    const channel = await User.aggregate([
+        {
+            $match: {
+                username: username?.toLowerCase()
+            }
+        },
+        {
+            // number of subscribers
+            $lookup: {
+                // we add s at the end as it is how the collection name is stored in the mongodb
+                from: "subscriptions",
+                localField: "_id",
+                foreignField: "channel",
+                as: "subscribers"
+            }
+        },
+        {
+            // channels we are subscribed to
+            $lookup: {
+                from: "subscriptions",
+                localField: "_id",
+                foreignField: "subscriber",
+                as: "subscribedTo"
+            }
+        },
+        {
+            // added fields in the user object
+            $addFields: {
+                subscribersCount: {
+                    $size: "$subscribers"
+                },
+                channelsSubscribedToCount: {
+                    $size: "$subscribedTo"
+                },
+                isSubscribed: {
+                    $cond: {
+                        if: {$in: [req.user?._id, "$subscribers.subscriber"]},
+                        then: true,
+                        else: false
+                    }
+                }
+            }
+        },
+        {
+            // project is used to show the fields which we want to show
+            // we'll assign 1 to the fields which we want to show and 0 to the fields which we don't want to show
+            $project: {
+                fullname: 1,
+                username: 1,
+                subscribersCount: 1,
+                channelsSubscribedToCount: 1,
+                isSubscribed: 1,
+                avatar: 1,
+                coverImage: 1,
+                email: 1
+            }
+        }
+    ])
+
+    if(!channel?.length) {
+        throw new ApiError(404, "Channel does not exists")
+    }
+
+    // aggregation pipelines always return an array and at index 0 we have the id of the user
+    return res
+    .status(200)
+    .json(new ApiResponse(200, channel[0], "User Channel fetched successfully"))
+})
+
+const getWatchHistory = asyncHandler(async(req,res) => {
+    const user = await User.aggregate([
+        {
+            // req.user._id returns a string and we need to convert it into ObjectId which is done by mongoose behind the scenes except in the case of aggregation pipelines
+            $match: {
+                // we are matching the user id
+                // all the aggregation pipelines code is passed directly and mongoose doesn't interfere withe pipeline code
+                // therefore we cant write req.user.id directly
+                _id: new mongoose.Types.ObjectId(req.user.id)
+            }
+        },
+        {
+            $lookup: {
+                from: "videos",
+                localField: "watchHistory",
+                foreignField: "_id",
+                as: "watchHistory",
+                pipeline: [
+                    {
+                        from: "user",
+                        localField: "owner",
+                        foreignField: "_id",
+                        as: "owner",
+                        // we have created a sub pipeline to ensure selected data is projected
+                        pipeline: [
+                            {
+                                $project: {
+                                    fullname: 1,
+                                    username: 1,
+                                    avater: 1
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        // this step is not compulsory
+                        // in this step we are adding the owner field so that in the frontend we can directly access the owner field
+                        // otherwise if we don't perform this step then the returned value will be an array and we have to access the owner field by using the index 0
+                        // but here we are returning owner object
+                        $addFields: {
+                            owner: {
+                                $first: "$owner"
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+    ])
+
+    return res
+    .status(200)
+    .json(
+        new ApiResponse(
+            200,
+            user[0].watchHistory,
+            "Watch history fetched successfully"
+        )
+    )
+})
 
 export {
     registerUser,
@@ -339,5 +475,7 @@ export {
     getCurrentUser,
     updateAccountDetails,
     updateUserAvatar,
-    updateUserCoverImage
+    updateUserCoverImage,
+    getUserChannelProfile,
+    getWatchHistory
 }
